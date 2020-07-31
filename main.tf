@@ -1,13 +1,21 @@
+terraform {
+	required_version = ">= 0.12"
+}
+
 provider "aws" {
 	region = "us-east-2"
 }
 
-variable "server_port" {
-	type        = number
-	description = "Port used by server for http requests"
-	default			= 8080
-}
+resource "aws_security_group" "instance" {
+	name = "terraform-example-instance"
 
+	ingress {
+		from_port		= var.server_port
+		to_port			= var.server_port
+		protocol		= "tcp"
+		cidr_blocks = ["0.0.0.0/0"]
+	}
+}
 
 resource "aws_instance" "example" {
 	ami						= "ami-0c55b159cbfafe1f0"
@@ -76,21 +84,10 @@ resource "aws_elb" "example" {
 
 	# listeners
 	listener {
-		lb_port						= 80
+		lb_port						= var.elb_port
 		lb_protocol				= "http"
 		instance_port 		= var.server_port
 		instance_protocol = "http"
-	}
-}
-
-resource "aws_security_group" "instance" {
-	name = "terraform-example-instance"
-
-	ingress {
-		from_port		= var.server_port
-		to_port			= var.server_port
-		protocol		= "tcp"
-		cidr_blocks = ["0.0.0.0/0"]
 	}
 }
 
@@ -105,20 +102,59 @@ resource "aws_security_group" "elb" {
 	}
 
 	ingress {
-		from_port			= 80
-		to_port				= 80
+		from_port			= var.elb_port
+		to_port				= var.elb_port
 		protocol			= "tcp"
 		cidr_blocks		= ["0.0.0.0/0"]
 	}
 }
 
-output "public_ip" {
-	value       = aws_instance.example.public_ip
-	sensitive   = false
-	description = "Public IP for server"
+resource "aws_s3_bucket" "jgipsonterraformstatebackup" {
+  bucket = "jgipsonterraformstatebackup"
+
+  # enable versioning, full revision history of state files
+  versioning {
+    enabled = true
+  }
+
+  # enable server side encrytion as default
+  server_side_encryption_configuration {
+    rule {
+      apply_server_side_encryption_by_default {
+        sse_algorithm = "AES256"
+      }
+    }
+  }
 }
 
-output "clb_dns_name" {
-	value				= aws_elb.example.dns_name
-	description	= "Domain name of load balancer"
+resource "aws_dynamodb_table" "terraform_locks" {
+  name                = "terraform-up-and-running-locks"
+  billing_mode        = "PAY_PER_REQUEST"
+  hash_key            = "LockID"
+
+  attribute {
+    name = "LockID"
+    type = "S"
+  }
+}
+
+resource "aws_db_instance" "example" {
+	identifier_prefix			= "terraform-up-and-running"
+	engine							=	"mysql"
+	allocated_storage		= 10
+	instance_class			= "db.t2.micro"
+	name								=	"example_database"
+	username						=	"admin"
+	password 						= "password"
+}
+
+terraform {
+  backend "s3" {
+    bucket = "jgipsonterraformstatebackup"
+    key    = "stage/data-stores/mysql/terraform.tfstate"
+    region = "us-east-2"
+
+    dynamodb_table = "terraform-up-and-running-locks"
+    encrypt = true
+  }
 }
